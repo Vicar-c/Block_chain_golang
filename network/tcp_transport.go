@@ -1,0 +1,73 @@
+package network
+
+import (
+	"bytes"
+	"fmt"
+	"net"
+)
+
+type TCPPeer struct {
+	conn     net.Conn
+	Outgoing bool
+}
+
+func (p *TCPPeer) Send(b []byte) error {
+	_, err := p.conn.Write(b)
+	return err
+}
+
+func (p *TCPPeer) readLoop(rpcCh chan RPC) {
+	buf := make([]byte, 4096)
+	for {
+		n, err := p.conn.Read(buf)
+		if err != nil {
+			fmt.Printf("read error: %s", err)
+			continue
+		}
+		msg := buf[:n]
+		//fmt.Println("p.conn.RemoteAddr is ", p.conn.RemoteAddr())
+		rpcCh <- RPC{
+			From:    p.conn.RemoteAddr(),
+			Payload: bytes.NewReader(msg),
+		}
+		//fmt.Println(string(msg))
+	}
+}
+
+type TCPTransport struct {
+	peerCh     chan *TCPPeer
+	ListenAddr string
+	Listener   net.Listener
+}
+
+func NewTcpTransport(addr string, peerCh chan *TCPPeer) *TCPTransport {
+	return &TCPTransport{
+		peerCh:     peerCh,
+		ListenAddr: addr,
+	}
+}
+
+func (t *TCPTransport) acceptLoop() {
+	for {
+		conn, err := t.Listener.Accept()
+		if err != nil {
+			fmt.Printf("accept error from %+v\n", conn)
+			continue
+		}
+		fmt.Println("TCP transport accept port: ", t.ListenAddr)
+		peer := &TCPPeer{conn: conn}
+		t.peerCh <- peer
+	}
+}
+
+func (t *TCPTransport) Start() error {
+	In, err := net.Listen("tcp", t.ListenAddr)
+	if err != nil {
+		return err
+	}
+	t.Listener = In
+
+	go t.acceptLoop()
+	//fmt.Println("TCP transport listen to port: ", t.Listener)
+	return nil
+}

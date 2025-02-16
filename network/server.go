@@ -1,0 +1,330 @@
+package network
+
+import (
+	"block_chain/core"
+	"block_chain/crypto"
+	"block_chain/types"
+	"bytes"
+	"fmt"
+	"github.com/go-kit/log"
+	"net"
+	"os"
+	"sync"
+	"time"
+)
+
+var defaultBlockTime = 5 * time.Second
+
+type ServerOpts struct {
+	SeedNodes     []string
+	ListenAddr    string
+	TCPTransport  *TCPTransport
+	ID            string
+	Logger        log.Logger
+	RPCDecodeFunc RPCDecodeFunc
+	RPCProcessor  RPCProcessor
+	BlockTime     time.Duration
+	PrivateKey    *crypto.PrivateKey
+}
+
+type Server struct {
+	// 匿名嵌套结构体，在没有显式初始化ServerOpts的情况下，对内部字段的赋值不会生效，但不会报错（直接就是0值）
+	ServerOpts
+	TCPTransport *TCPTransport
+	peerCh       chan *TCPPeer
+	mu           sync.RWMutex
+	peerMap      map[net.Addr]*TCPPeer
+	memPool      *TxPool
+	chain        *core.Blockchain
+	isValidator  bool
+	rpcCh        chan RPC
+	quitChan     chan struct{}
+}
+
+func NewServer(opts ServerOpts) (*Server, error) {
+	if opts.BlockTime == time.Duration(0) {
+		opts.BlockTime = defaultBlockTime
+	}
+	if opts.RPCDecodeFunc == nil {
+		opts.RPCDecodeFunc = DefaultRPCDecodeFunc
+	}
+	if opts.Logger == nil {
+		opts.Logger = log.NewLogfmtLogger(os.Stderr)
+		opts.Logger = log.With(opts.Logger, "addr", opts.ID)
+	}
+
+	// new()仅仅只会分配一块零值的内存
+	chain, err := core.NewBlockchain(opts.Logger, genesisBlock())
+	if err != nil {
+		return nil, err
+	}
+	peerCh := make(chan *TCPPeer)
+	tr := NewTcpTransport(opts.ListenAddr, peerCh)
+	s := &Server{
+		TCPTransport: tr,
+		peerCh:       peerCh,
+		peerMap:      make(map[net.Addr]*TCPPeer),
+		ServerOpts:   opts,
+		chain:        chain,
+		memPool:      NewTxPool(10),
+		isValidator:  opts.PrivateKey != nil,
+		rpcCh:        make(chan RPC),
+		quitChan:     make(chan struct{}, 1),
+	}
+	s.TCPTransport.peerCh = peerCh
+	if s.RPCProcessor == nil {
+		// 如果RPCProcessor不存在，则调用Server自己的接口实现，即调用自己的ProcessMessage函数
+		s.RPCProcessor = s
+	}
+
+	if s.isValidator {
+		go s.validatorLoop()
+	}
+
+	return s, nil
+}
+
+func (s *Server) bootstrapNetwork() {
+	for _, addr := range s.SeedNodes {
+		//fmt.Println("trying to connect to ", addr)
+		go func(addr string) {
+			conn, err := net.Dial("tcp", addr)
+			if err != nil {
+				fmt.Printf("could not connect to %+v\n", conn)
+				return
+			}
+			s.peerCh <- &TCPPeer{
+				conn: conn,
+			}
+			//fmt.Println("TCP peer ", conn)
+		}(addr)
+	}
+}
+
+func (s *Server) Start() {
+	s.TCPTransport.Start()
+	time.Sleep(time.Second * 1)
+	s.bootstrapNetwork()
+	s.Logger.Log("msg", "accepting TCP connection on", "addr", s.ListenAddr, "id", s.ID)
+free:
+	for {
+		select {
+		case peer := <-s.peerCh:
+			s.peerMap[peer.conn.RemoteAddr()] = peer
+			//fmt.Println("TCP listen addr is", s.ListenAddr, "peerMap is", s.peerMap, " peer is", peer.conn.LocalAddr())
+			go peer.readLoop(s.rpcCh)
+			fmt.Printf("new peer => +%v\n", peer)
+		case rpc := <-s.rpcCh:
+			msg, err := s.RPCDecodeFunc(rpc)
+			if err != nil {
+				s.Logger.Log("error", err)
+				continue
+			}
+			if err := s.RPCProcessor.ProcessMessage(msg); err != nil {
+				if err != core.ErrBlockKnown {
+					s.Logger.Log("error", err)
+				}
+			}
+		case <-s.quitChan:
+			break free
+		}
+	}
+	fmt.Println("Server shutdown")
+}
+
+func (s *Server) validatorLoop() {
+	ticker := time.NewTicker(s.BlockTime)
+
+	s.Logger.Log("msg", "Starting validator loop", "blockTime", s.BlockTime)
+
+	for {
+		<-ticker.C
+		s.createNewBlock()
+	}
+}
+
+func (s *Server) ProcessMessage(msg *DecodedMessage) error {
+
+	switch t := msg.Data.(type) {
+	case *core.Transaction:
+		return s.processTransaction(t)
+	case *core.Block:
+		//s.Logger.Log("msg", "process block")
+		return s.processBlock(t)
+	case *GetStatusMessage:
+		//return s.processGetStatusMessage(msg.From)
+	case *StatusMessage:
+		//return s.processStatusMessage(msg.From, t)
+	case *GetBlocksMessage:
+		//return s.processGetBlocksMessage(msg.From, t)
+	}
+
+	return nil
+}
+
+func (s *Server) processGetBlocksMessage(from net.Addr, data *GetBlocksMessage) error {
+	fmt.Printf("got get blocks message => +%v\n", data)
+
+	return nil
+}
+
+//	func (s *Server) SendGetStatusMessage(tr Transport) error {
+//		getStatusMsg := new(GetStatusMessage)
+//		buf := new(bytes.Buffer)
+//
+//		if err := gob.NewEncoder(buf).Encode(getStatusMsg); err != nil {
+//			return nil
+//		}
+//
+//		msg := NewMessage(MessageTypeGetStatus, buf.Bytes())
+//		//s.Logger.Log("getStatusMessage from", s.Transport.Addr(), "to", tr.Addr())
+//		return s.Transport.SendMessage(tr.Addr(), msg.Bytes())
+//	}
+func (s *Server) broadcast(payload []byte) error {
+	//fmt.Println("listen server is ", s.ListenAddr, " server peerMap is", s.peerMap)
+	s.mu.RLock()
+	defer s.mu.RUnlock()
+	for netAddr, peer := range s.peerMap {
+		if err := peer.Send(payload); err != nil {
+			return fmt.Errorf("peer send error => error %s [err: %s]", netAddr, err)
+		}
+		//fmt.Println("broadcast to ", netAddr, " from ", peer)
+	}
+
+	return nil
+}
+
+//func (s *Server) processGetStatusMessage(from NetAddr) error {
+//	fmt.Printf("=> Received status msg from %s => %s\n", from, s.Transport.Addr())
+//
+//	statusMessage := StatusMessage{
+//		ID:            s.ID,
+//		CurrentHeight: s.chain.Height(),
+//	}
+//	buf := new(bytes.Buffer)
+//	if err := gob.NewEncoder(buf).Encode(statusMessage); err != nil {
+//		return err
+//	}
+//
+//	message := NewMessage(MessageTypeStatus, buf.Bytes())
+//
+//	return s.Transport.SendMessage(from, message.Bytes())
+//}
+
+func (s *Server) processBlock(b *core.Block) error {
+	if err := s.chain.AddBlock(b); err != nil {
+		return err
+	}
+	//fmt.Printf("server listen addr is %s\n", s.ListenAddr)
+	go s.broadcastBlock(b)
+
+	return nil
+}
+
+func (s *Server) processTransaction(tx *core.Transaction) error {
+
+	hash := tx.Hash(core.TxHasher{})
+
+	if s.memPool.Contains(hash) {
+		return nil
+	}
+
+	if err := tx.Verify(); err != nil {
+		return err
+	}
+
+	tx.SetFirstSeen(time.Now().UnixNano())
+
+	//s.Logger.Log("msg", "adding new tx to mempool",
+	//	"hash", hash,
+	//	"mempoolLength", s.memPool.PendingCount())
+
+	go s.broadcastTx(tx)
+
+	s.memPool.Add(tx)
+
+	return nil
+}
+
+//func (s *Server) processStatusMessage(from NetAddr, data *StatusMessage) error {
+//	if data.CurrentHeight <= s.chain.Height() {
+//		s.Logger.Log("msg", "can not sync, blockHeight too low", "ourHeight", s.chain.Height(), "height", data.CurrentHeight, "addr", from)
+//		return nil
+//	}
+//
+//	getBlocksMessage := &GetBlocksMessage{
+//		From: s.chain.Height(),
+//		To:   0,
+//	}
+//	buf := new(bytes.Buffer)
+//	if err := gob.NewEncoder(buf).Encode(getBlocksMessage); err != nil {
+//		return err
+//	}
+//	msg := NewMessage(MessageTypeGetBlocks, buf.Bytes())
+//	return s.Transport.SendMessage(from, msg.Bytes())
+//}
+
+func (s *Server) broadcastBlock(b *core.Block) error {
+	buf := &bytes.Buffer{}
+	if err := b.Encode(core.NewGobBlockEncoder(buf)); err != nil {
+		return nil
+	}
+	msg := NewMessage(MessageTypeBlock, buf.Bytes())
+
+	return s.broadcast(msg.Bytes())
+}
+
+func (s *Server) broadcastTx(tx *core.Transaction) error {
+	buf := &bytes.Buffer{}
+	if err := tx.Encode(core.NewGobTxEncoder(buf)); err != nil {
+		return err
+	}
+
+	msg := NewMessage(MessageTypeTx, buf.Bytes())
+
+	return s.broadcast(msg.Bytes())
+}
+
+func (s *Server) createNewBlock() error {
+	currentHeader, err := s.chain.GetHeader(s.chain.Height())
+	// s.Logger.Log("height", s.chain.Height())
+	if err != nil {
+		return nil
+	}
+
+	txx := s.memPool.Pending()
+
+	block, err := core.NewBlockFromPrevHeader(currentHeader, txx)
+	if err != nil {
+		return err
+	}
+
+	if err := block.Sign(*s.PrivateKey); err != nil {
+		return err
+	}
+
+	if err := s.chain.AddBlock(block); err != nil {
+		return err
+	}
+
+	// 在下一个Block将交易加入后，memPool清空
+	s.memPool.ClearPending()
+
+	go s.broadcastBlock(block)
+
+	return nil
+}
+
+func genesisBlock() *core.Block {
+	header := &core.Header{
+		Version:  1,
+		DataHash: types.Hash{},
+		Height:   0,
+		// 这里必须要设为一个单一值,这样才能保证所有的Server初始的状态一致
+		// 保证广播时不会因为前面的初始哈希不一致导致广播失败
+		Timestamp: 111111,
+	}
+
+	b, _ := core.NewBlock(header, nil)
+	return b
+}
