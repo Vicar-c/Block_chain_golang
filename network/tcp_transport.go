@@ -3,6 +3,7 @@ package network
 import (
 	"bytes"
 	"fmt"
+	"io"
 	"net"
 )
 
@@ -20,6 +21,9 @@ func (p *TCPPeer) readLoop(rpcCh chan RPC) {
 	buf := make([]byte, 4096)
 	for {
 		n, err := p.conn.Read(buf)
+		if err == io.EOF {
+			continue
+		}
 		if err != nil {
 			fmt.Printf("read error: %s", err)
 			continue
@@ -36,38 +40,38 @@ func (p *TCPPeer) readLoop(rpcCh chan RPC) {
 
 type TCPTransport struct {
 	peerCh     chan *TCPPeer
-	ListenAddr string
-	Listener   net.Listener
+	listenAddr string
+	listener   net.Listener
 }
 
 func NewTcpTransport(addr string, peerCh chan *TCPPeer) *TCPTransport {
 	return &TCPTransport{
 		peerCh:     peerCh,
-		ListenAddr: addr,
+		listenAddr: addr,
 	}
 }
 
 func (t *TCPTransport) acceptLoop() {
 	for {
-		conn, err := t.Listener.Accept()
+		conn, err := t.listener.Accept()
 		if err != nil {
 			fmt.Printf("accept error from %+v\n", conn)
 			continue
 		}
-		fmt.Println("TCP transport accept port: ", t.ListenAddr)
+		//fmt.Println("TCP transport remote port: ", conn.RemoteAddr())
 		peer := &TCPPeer{conn: conn}
 		t.peerCh <- peer
 	}
 }
 
 func (t *TCPTransport) Start() error {
-	In, err := net.Listen("tcp", t.ListenAddr)
+	In, err := net.Listen("tcp", t.listenAddr)
 	if err != nil {
 		return err
 	}
-	t.Listener = In
+	t.listener = In
 
 	go t.acceptLoop()
-	//fmt.Println("TCP transport listen to port: ", t.Listener)
+	//fmt.Println("TCP transport listen to port: ", t.listenAddr)
 	return nil
 }

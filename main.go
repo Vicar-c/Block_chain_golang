@@ -7,22 +7,28 @@ import (
 	"bytes"
 	"log"
 	"net"
+	"time"
 )
 
 func main() {
 	privKey := crypto.GeneratePrivateKey()
-	localNode := makeServer("LOCAL_NODE", &privKey, ":3000", []string{":4000"})
+	localNode := makeServer("LOCAL_NODE", &privKey, ":3000", []string{":3001"})
 	go localNode.Start()
 
-	remoteNode := makeServer("REMOTE_NODE", nil, ":4000", []string{":5000"})
+	remoteNode := makeServer("REMOTE_NODE", nil, ":3001", []string{":3002"})
 	go remoteNode.Start()
 
-	remodeNodeB := makeServer("REMOTE_NODE_B", nil, ":5000", nil)
-	go remodeNodeB.Start()
+	remoteNodeB := makeServer("REMOTE_NODE_B", nil, ":3002", nil)
+	go remoteNodeB.Start()
 
-	//time.Sleep(1 * time.Second)
-	//
-	//go tcpTester()
+	go func() {
+		time.Sleep(11 * time.Second)
+		lateNode := makeServer("LATE_NODE", nil, ":3003", []string{":3001"})
+		go lateNode.Start()
+	}()
+
+	time.Sleep(1 * time.Second)
+	tcpTester()
 	select {}
 	//initRemoteServers(transports)
 	//
@@ -40,14 +46,6 @@ func main() {
 	//	}
 	//}()
 	//
-	//go func() {
-	//	time.Sleep(7 * time.Second)
-	//	trLate := network.NewLocalTransport("LATE_REMOTE")
-	//	remoteNodeC.Connect(trLate)
-	//	lateServer := makeServer(string(trLate.Addr()), trLate, nil)
-	//
-	//	go lateServer.Start()
-	//}()
 	//
 	//privKey := crypto.GeneratePrivateKey()
 	//localServer := makeServer("LOCAL", transports[0], &privKey)
@@ -98,17 +96,17 @@ func makeServer(id string, pk *crypto.PrivateKey, addr string, seedNodes []strin
 	return s
 }
 
-func sendTransaction(tr network.Transport, to net.Addr) error {
-	privKey := crypto.GeneratePrivateKey()
-	tx := core.NewTransaction(contract())
-	tx.Sign(privKey)
-	buf := &bytes.Buffer{}
-	if err := tx.Encode(core.NewGobTxEncoder(buf)); err != nil {
-		return err
-	}
-	msg := network.NewMessage(network.MessageTypeTx, buf.Bytes())
-	return tr.SendMessage(to, msg.Bytes())
-}
+//func sendTransaction(tr network.Transport, to net.Addr) error {
+//	privKey := crypto.GeneratePrivateKey()
+//	tx := core.NewTransaction(contract())
+//	tx.Sign(privKey)
+//	buf := &bytes.Buffer{}
+//	if err := tx.Encode(core.NewGobTxEncoder(buf)); err != nil {
+//		return err
+//	}
+//	msg := network.NewMessage(network.MessageTypeTx, buf.Bytes())
+//	return tr.SendMessage(to, msg.Bytes())
+//}
 
 func contract() []byte {
 	pushFoo := []byte{0x4f, 0x0c, 0x4f, 0x0c, 0x46, 0x0c, 0x03, 0x0a, 0x0d, 0xae}
