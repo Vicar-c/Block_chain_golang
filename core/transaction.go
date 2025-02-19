@@ -3,21 +3,49 @@ package core
 import (
 	"block_chain/crypto"
 	"block_chain/types"
+	"encoding/gob"
 	"fmt"
+	"math/rand"
 )
 
+type TxType byte
+
+const (
+	TxTypeCollection TxType = iota // 0x0
+	TxTypeMint                     // 0x01
+)
+
+type CollectionTx struct {
+	Fee      int64
+	MetaData []byte
+}
+
+type MintTx struct {
+	Fee             int64
+	NFT             types.Hash
+	Collection      types.Hash
+	MetaData        []byte
+	CollectionOwner crypto.PublicKey
+	Signature       crypto.Signature
+}
+
 type Transaction struct {
+	// Only used for native NFT logic
+	TxInner any
+	// Any arbitrary data for the VM
 	Data      []byte
+	To        crypto.PublicKey
+	Value     uint64
 	From      crypto.PublicKey
 	Signature *crypto.Signature
+	Nonce     int64
 	hash      types.Hash
-	// the timestamp of when tx is first seen locally
-	firstSeen int64
 }
 
 func NewTransaction(data []byte) *Transaction {
 	return &Transaction{
-		Data: data,
+		Data:  data,
+		Nonce: rand.Int63n(1000000000000000),
 	}
 }
 
@@ -29,10 +57,12 @@ func (tx *Transaction) Hash(hasher Hasher[*Transaction]) types.Hash {
 }
 
 func (tx *Transaction) Sign(privKey crypto.PrivateKey) error {
-	sig, err := privKey.Sign(tx.Data)
+	hash := tx.Hash(TxHasher{})
+	sig, err := privKey.Sign(hash.ToSlice())
 	if err != nil {
 		return err
 	}
+
 	tx.From = privKey.PublicKey()
 	tx.Signature = sig
 
@@ -43,8 +73,8 @@ func (tx *Transaction) Verify() error {
 	if tx.Signature == nil {
 		return fmt.Errorf("transaction has no signature")
 	}
-
-	if !tx.Signature.Verify(tx.From, tx.Data) {
+	hash := tx.Hash(TxHasher{})
+	if !tx.Signature.Verify(tx.From, hash.ToSlice()) {
 		return fmt.Errorf("invalid transaction signature")
 	}
 
@@ -59,10 +89,7 @@ func (tx *Transaction) Encode(enc Encoder[*Transaction]) error {
 	return enc.Encode(tx)
 }
 
-func (tx *Transaction) SetFirstSeen(t int64) {
-	tx.firstSeen = t
-}
-
-func (tx *Transaction) FirstSeen() int64 {
-	return tx.firstSeen
+func init() {
+	gob.Register(CollectionTx{})
+	gob.Register(MintTx{})
 }

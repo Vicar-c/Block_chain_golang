@@ -1,6 +1,7 @@
 package network
 
 import (
+	"block_chain/api"
 	"block_chain/core"
 	"block_chain/crypto"
 	"block_chain/types"
@@ -17,6 +18,7 @@ import (
 var defaultBlockTime = 5 * time.Second
 
 type ServerOpts struct {
+	APIListenAddr string
 	SeedNodes     []string
 	ListenAddr    string
 	TCPTransport  *TCPTransport
@@ -59,6 +61,18 @@ func NewServer(opts ServerOpts) (*Server, error) {
 	if err != nil {
 		return nil, err
 	}
+
+	if len(opts.APIListenAddr) > 0 {
+		//fmt.Println(opts.APIListenAddr)
+		apiServerConfig := api.ServerConfig{
+			Logger:     opts.Logger,
+			ListenAddr: opts.ListenAddr,
+		}
+		apiServer := api.NewServer(apiServerConfig, chain)
+		go apiServer.Start()
+		opts.Logger.Log("msg", "JSON API server running", "port", opts.APIListenAddr)
+	}
+
 	peerCh := make(chan *TCPPeer)
 	tr := NewTcpTransport(opts.ListenAddr, peerCh)
 	s := &Server{

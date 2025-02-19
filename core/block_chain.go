@@ -1,27 +1,40 @@
 package core
 
 import (
+	"block_chain/types"
 	"fmt"
 	"github.com/go-kit/log"
 	"sync"
 )
 
 type Blockchain struct {
-	logger        log.Logger
-	store         Storage
-	lock          sync.RWMutex
-	headers       []*Header
-	blocks        []*Block
-	validator     Validator
-	contractState *State
+	logger     log.Logger
+	store      Storage
+	lock       sync.RWMutex
+	headers    []*Header
+	blocks     []*Block
+	txStore    map[types.Hash]*Transaction
+	blockStore map[types.Hash]*Block
+
+	//accountState *AccountState
+
+	stateLock       sync.RWMutex
+	collectionState map[types.Hash]*CollectionTx
+	mintState       map[types.Hash]*MintTx
+	validator       Validator
+	contractState   *State
 }
 
 func NewBlockchain(l log.Logger, genesis *Block) (*Blockchain, error) {
 	bc := &Blockchain{
-		contractState: NewState(),
-		headers:       []*Header{},
-		store:         NewMemorystore(),
-		logger:        l,
+		contractState:   NewState(),
+		headers:         []*Header{},
+		store:           NewMemorystore(),
+		logger:          l,
+		collectionState: make(map[types.Hash]*CollectionTx),
+		mintState:       make(map[types.Hash]*MintTx),
+		blockStore:      make(map[types.Hash]*Block),
+		txStore:         make(map[types.Hash]*Transaction),
 	}
 	bc.validator = NewBlockValidator(bc)
 	err := bc.addBlockWithoutValidation(genesis)
@@ -69,6 +82,18 @@ func (bc *Blockchain) GetHeader(height uint32) (*Header, error) {
 	return bc.headers[height], nil
 }
 
+func (bc *Blockchain) GetTxByHash(hash types.Hash) (*Transaction, error) {
+	bc.lock.Lock()
+	defer bc.lock.Unlock()
+
+	tx, ok := bc.txStore[hash]
+	if !ok {
+		return nil, fmt.Errorf("could not find tx with hash (%s)", hash)
+	}
+
+	return tx, nil
+}
+
 func (bc *Blockchain) HasBlock(height uint32) bool {
 	return height <= bc.Height()
 }
@@ -80,9 +105,26 @@ func (bc *Blockchain) Height() uint32 {
 }
 
 func (bc *Blockchain) addBlockWithoutValidation(b *Block) error {
+	//bc.stateLock.Lock()
+	//for i := 0; i < len(b.Transactions); i++ {
+	//	if err := bc.handleTransaction(b.Transactions[i]); err != nil {
+	//		bc.logger.Log("error", err.Error())
+	//
+	//		b.Transactions[i] = b.Transactions[len(b.Transactions)-1]
+	//		b.Transactions = b.Transactions[:len(b.Transactions)-1]
+	//
+	//		continue
+	//	}
+	//}
+	//bc.stateLock.Unlock()
 	bc.lock.Lock()
 	bc.headers = append(bc.headers, b.Header)
 	bc.blocks = append(bc.blocks, b)
+	bc.blockStore[b.Hash(BlockHasher{})] = b
+
+	for _, tx := range b.Transactions {
+		bc.txStore[tx.Hash(TxHasher{})] = tx
+	}
 	bc.lock.Unlock()
 
 	bc.logger.Log(
