@@ -2,7 +2,9 @@ package core
 
 import (
 	"block_chain/types"
+	"bytes"
 	"crypto/sha256"
+	"encoding/binary"
 )
 
 // 范型接口
@@ -24,5 +26,13 @@ type TxHasher struct {
 }
 
 func (TxHasher) Hash(tx *Transaction) types.Hash {
-	return sha256.Sum256(tx.Data)
+	buf := new(bytes.Buffer)
+
+	binary.Write(buf, binary.LittleEndian, tx.Data)
+	binary.Write(buf, binary.LittleEndian, tx.To)
+	binary.Write(buf, binary.LittleEndian, tx.Value)
+	binary.Write(buf, binary.LittleEndian, tx.From)
+	binary.Write(buf, binary.LittleEndian, tx.Nonce)
+
+	return types.Hash(sha256.Sum256(buf.Bytes()))
 }

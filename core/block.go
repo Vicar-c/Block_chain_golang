@@ -43,7 +43,7 @@ func NewBlock(h *Header, txx []*Transaction) (*Block, error) {
 }
 
 func NewBlockFromPrevHeader(prevHeader *Header, txx []*Transaction) (*Block, error) {
-	dataHash, err := CalcuateDataHash(txx)
+	dataHash, err := CalculateDataHash(txx)
 	if err != nil {
 		return nil, err
 	}
@@ -61,7 +61,7 @@ func NewBlockFromPrevHeader(prevHeader *Header, txx []*Transaction) (*Block, err
 
 func (b *Block) AddTransaction(tx *Transaction) {
 	b.Transactions = append(b.Transactions, tx)
-	hash, _ := CalcuateDataHash(b.Transactions)
+	hash, _ := CalculateDataHash(b.Transactions)
 	b.Header.DataHash = hash
 }
 
@@ -90,7 +90,7 @@ func (b *Block) Verify() error {
 		}
 	}
 
-	dataHash, err := CalcuateDataHash(b.Transactions)
+	dataHash, err := CalculateDataHash(b.Transactions)
 	if err != nil {
 		return err
 	}
@@ -117,7 +117,7 @@ func (b *Block) Hash(hasher Hasher[*Header]) types.Hash {
 }
 
 // 返回变量在返回值中声明，可以让defer修改该值，同时避免在内部重新声明
-func CalcuateDataHash(txx []*Transaction) (hash types.Hash, err error) {
+func CalculateDataHash(txx []*Transaction) (hash types.Hash, err error) {
 	buf := &bytes.Buffer{}
 
 	for _, tx := range txx {

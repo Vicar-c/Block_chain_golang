@@ -51,6 +51,18 @@ func NewTcpTransport(addr string, peerCh chan *TCPPeer) *TCPTransport {
 	}
 }
 
+func (t *TCPTransport) Start() error {
+	In, err := net.Listen("tcp", t.listenAddr)
+	if err != nil {
+		return err
+	}
+	t.listener = In
+
+	go t.acceptLoop()
+	//fmt.Println("TCP transport listen to port: ", t.listenAddr)
+	return nil
+}
+
 func (t *TCPTransport) acceptLoop() {
 	for {
 		conn, err := t.listener.Accept()
@@ -62,16 +74,4 @@ func (t *TCPTransport) acceptLoop() {
 		peer := &TCPPeer{conn: conn}
 		t.peerCh <- peer
 	}
-}
-
-func (t *TCPTransport) Start() error {
-	In, err := net.Listen("tcp", t.listenAddr)
-	if err != nil {
-		return err
-	}
-	t.listener = In
-
-	go t.acceptLoop()
-	//fmt.Println("TCP transport listen to port: ", t.listenAddr)
-	return nil
 }

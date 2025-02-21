@@ -6,6 +6,7 @@ import (
 	"crypto/elliptic"
 	"encoding/gob"
 	"fmt"
+	"github.com/sirupsen/logrus"
 	"io"
 	"net"
 )
@@ -58,10 +59,10 @@ func DefaultRPCDecodeFunc(rpc RPC) (*DecodedMessage, error) {
 		return nil, fmt.Errorf("failed to decode message from %s: %s", rpc.From, err)
 	}
 
-	//logrus.WithFields(logrus.Fields{
-	//	"from": rpc.From,
-	//	"type": msg.Header,
-	//}).Debug("new message coming")
+	logrus.WithFields(logrus.Fields{
+		"from": rpc.From,
+		"type": msg.Header,
+	}).Debug("new message coming")
 
 	switch msg.Header {
 	case MessageTypeTx:
@@ -84,10 +85,10 @@ func DefaultRPCDecodeFunc(rpc RPC) (*DecodedMessage, error) {
 		}, nil
 	case MessageTypeGetStatus:
 		//log.Fatal("receive get status message")
-		getStatusMessage := new(GetStatusMessage)
+		//getStatusMessage := new(GetStatusMessage)
 		return &DecodedMessage{
 			From: rpc.From,
-			Data: getStatusMessage,
+			Data: &GetStatusMessage{},
 		}, nil
 	case MessageTypeStatus:
 		statusMessage := new(StatusMessage)

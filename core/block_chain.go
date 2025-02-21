@@ -1,6 +1,7 @@
 package core
 
 import (
+	"block_chain/crypto"
 	"block_chain/types"
 	"fmt"
 	"github.com/go-kit/log"
@@ -16,7 +17,7 @@ type Blockchain struct {
 	txStore    map[types.Hash]*Transaction
 	blockStore map[types.Hash]*Block
 
-	//accountState *AccountState
+	accountState *AccountState
 
 	stateLock       sync.RWMutex
 	collectionState map[types.Hash]*CollectionTx
@@ -26,11 +27,20 @@ type Blockchain struct {
 }
 
 func NewBlockchain(l log.Logger, genesis *Block) (*Blockchain, error) {
+	// We should create all states inside the scope of the newblockchain.
+
+	// TODO: read this from disk later on
+	accountState := NewAccountState()
+
+	coinbase := crypto.PublicKey{}
+	accountState.CreateAccount(coinbase.Address())
+
 	bc := &Blockchain{
 		contractState:   NewState(),
 		headers:         []*Header{},
 		store:           NewMemorystore(),
 		logger:          l,
+		accountState:    accountState,
 		collectionState: make(map[types.Hash]*CollectionTx),
 		mintState:       make(map[types.Hash]*MintTx),
 		blockStore:      make(map[types.Hash]*Block),
@@ -60,6 +70,50 @@ func (bc *Blockchain) AddBlock(b *Block) error {
 	//}
 
 	return bc.addBlockWithoutValidation(b)
+}
+
+func (bc *Blockchain) handleNativeTransfer(tx *Transaction) error {
+	bc.logger.Log(
+		"msg", "handle native token transfer",
+		"from", tx.From,
+		"to", tx.To,
+		"value", tx.Value)
+
+	return bc.accountState.Transfer(tx.From.Address(), tx.To.Address(), tx.Value)
+}
+
+func (bc *Blockchain) handleNativeNFT(tx *Transaction) error {
+	hash := tx.Hash(TxHasher{})
+
+	switch t := tx.TxInner.(type) {
+	case CollectionTx:
+		bc.collectionState[hash] = &t
+		bc.logger.Log("msg", "created new NFT collection", "hash", hash)
+	case MintTx:
+		_, ok := bc.collectionState[t.Collection]
+		if !ok {
+			return fmt.Errorf("collection (%s) does not exist on the blockchain", t.Collection)
+		}
+		bc.mintState[hash] = &t
+
+		bc.logger.Log("msg", "created new NFT mint", "NFT", t.NFT, "collection", t.Collection)
+	default:
+		return fmt.Errorf("unsupported tx type %v", t)
+	}
+
+	return nil
+}
+
+func (bc *Blockchain) GetBlockByHash(hash types.Hash) (*Block, error) {
+	bc.lock.Lock()
+	defer bc.lock.Unlock()
+
+	block, ok := bc.blockStore[hash]
+	if !ok {
+		return nil, fmt.Errorf("block with hash (%s) not found", hash)
+	}
+
+	return block, nil
 }
 
 func (bc *Blockchain) GetBlock(height uint32) (*Block, error) {
@@ -104,19 +158,48 @@ func (bc *Blockchain) Height() uint32 {
 	return uint32(len(bc.headers) - 1)
 }
 
+func (bc *Blockchain) handleTransaction(tx *Transaction) error {
+	// If we have data inside execute that data on the VM.
+	if len(tx.Data) > 0 {
+		bc.logger.Log("msg", "executing code", "len", len(tx.Data), "hash", tx.Hash(&TxHasher{}))
+
+		vm := NewVM(tx.Data, bc.contractState)
+		if err := vm.Run(); err != nil {
+			return err
+		}
+	}
+
+	// If the txInner of the transaction is not nil we need to handle
+	// the native NFT implemtation.
+	if tx.TxInner != nil {
+		if err := bc.handleNativeNFT(tx); err != nil {
+			return err
+		}
+	}
+
+	// Handle the native transaction here
+	if tx.Value > 0 {
+		if err := bc.handleNativeTransfer(tx); err != nil {
+			return err
+		}
+	}
+
+	return nil
+}
+
 func (bc *Blockchain) addBlockWithoutValidation(b *Block) error {
-	//bc.stateLock.Lock()
-	//for i := 0; i < len(b.Transactions); i++ {
-	//	if err := bc.handleTransaction(b.Transactions[i]); err != nil {
-	//		bc.logger.Log("error", err.Error())
-	//
-	//		b.Transactions[i] = b.Transactions[len(b.Transactions)-1]
-	//		b.Transactions = b.Transactions[:len(b.Transactions)-1]
-	//
-	//		continue
-	//	}
-	//}
-	//bc.stateLock.Unlock()
+	bc.stateLock.Lock()
+	for i := 0; i < len(b.Transactions); i++ {
+		if err := bc.handleTransaction(b.Transactions[i]); err != nil {
+			bc.logger.Log("error", err.Error())
+
+			b.Transactions[i] = b.Transactions[len(b.Transactions)-1]
+			b.Transactions = b.Transactions[:len(b.Transactions)-1]
+
+			continue
+		}
+	}
+	bc.stateLock.Unlock()
 	bc.lock.Lock()
 	bc.headers = append(bc.headers, b.Header)
 	bc.blocks = append(bc.blocks, b)

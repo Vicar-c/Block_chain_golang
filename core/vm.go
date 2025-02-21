@@ -21,7 +21,7 @@ const (
 type Stack struct {
 	data []any
 	// 下一个位置
-	sp int
+	//sp int
 }
 
 func NewStack(size int) *Stack {

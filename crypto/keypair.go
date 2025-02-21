@@ -20,7 +20,11 @@ func (k PrivateKey) Sign(data []byte) (*Signature, error) {
 	if err != nil {
 		return nil, err
 	}
-	return &Signature{s, r}, nil
+
+	return &Signature{
+		R: r,
+		S: s,
+	}, nil
 }
 
 func NewPrivateKeyFromReader(r io.Reader) PrivateKey {
@@ -44,10 +48,13 @@ func (k PrivateKey) PublicKey() PublicKey {
 
 type PublicKey []byte
 
+func (k PublicKey) String() string {
+	return hex.EncodeToString(k)
+}
+
 func (k PublicKey) Address() types.Address {
 	h := sha256.Sum256(k)
 
-	// 最后20位元素
 	return types.AddressFromBytes(h[len(h)-20:])
 }
 
@@ -68,5 +75,6 @@ func (sig Signature) Verify(pubKey PublicKey, data []byte) bool {
 		X:     x,
 		Y:     y,
 	}
+
 	return ecdsa.Verify(key, data, sig.R, sig.S)
 }

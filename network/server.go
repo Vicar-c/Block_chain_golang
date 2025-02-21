@@ -42,6 +42,7 @@ type Server struct {
 	isValidator  bool
 	rpcCh        chan RPC
 	quitChan     chan struct{}
+	txChan       chan *core.Transaction
 }
 
 func NewServer(opts ServerOpts) (*Server, error) {
@@ -62,13 +63,17 @@ func NewServer(opts ServerOpts) (*Server, error) {
 		return nil, err
 	}
 
+	// Channel being used to communicate between the JSON RPC server
+	// and the node that will process this message.
+	txChan := make(chan *core.Transaction)
+
 	if len(opts.APIListenAddr) > 0 {
 		//fmt.Println(opts.APIListenAddr)
 		apiServerConfig := api.ServerConfig{
 			Logger:     opts.Logger,
 			ListenAddr: opts.ListenAddr,
 		}
-		apiServer := api.NewServer(apiServerConfig, chain)
+		apiServer := api.NewServer(apiServerConfig, chain, txChan)
 		go apiServer.Start()
 		opts.Logger.Log("msg", "JSON API server running", "port", opts.APIListenAddr)
 	}
@@ -81,10 +86,11 @@ func NewServer(opts ServerOpts) (*Server, error) {
 		peerMap:      make(map[net.Addr]*TCPPeer),
 		ServerOpts:   opts,
 		chain:        chain,
-		memPool:      NewTxPool(10),
+		memPool:      NewTxPool(1000),
 		isValidator:  opts.PrivateKey != nil,
 		rpcCh:        make(chan RPC),
 		quitChan:     make(chan struct{}, 1),
+		txChan:       txChan,
 	}
 	s.TCPTransport.peerCh = peerCh
 	if s.RPCProcessor == nil {
@@ -101,7 +107,7 @@ func NewServer(opts ServerOpts) (*Server, error) {
 
 func (s *Server) bootstrapNetwork() {
 	for _, addr := range s.SeedNodes {
-		//fmt.Println("trying to connect to ", addr)
+		fmt.Println("trying to connect to ", addr)
 		go func(addr string) {
 			conn, err := net.Dial("tcp", addr)
 			if err != nil {
@@ -120,7 +126,7 @@ func (s *Server) Start() {
 	s.TCPTransport.Start()
 	time.Sleep(time.Second * 1)
 	s.bootstrapNetwork()
-	//s.Logger.Log("msg", "accepting TCP connection on", "addr", s.ListenAddr, "id", s.ID)
+	s.Logger.Log("msg", "accepting TCP connection on", "addr", s.ListenAddr, "id", s.ID)
 free:
 	for {
 		select {
@@ -133,6 +139,10 @@ free:
 				continue
 			}
 			//s.Logger.Log("msg", "peer added to the server", "outgoing", peer.Outgoing, "addr", peer.conn.RemoteAddr())
+		case tx := <-s.txChan:
+			if err := s.processTransaction(tx); err != nil {
+				s.Logger.Log("process TX error", err)
+			}
 		case rpc := <-s.rpcCh:
 			msg, err := s.RPCDecodeFunc(rpc)
 			if err != nil {
@@ -148,7 +158,7 @@ free:
 			break free
 		}
 	}
-	fmt.Println("Server shutdown")
+	s.Logger.Log("msg", "Server is shutting down")
 }
 
 func (s *Server) validatorLoop() {
@@ -430,13 +440,13 @@ func genesisBlock() *core.Block {
 		// 保证广播时不会因为前面的初始哈希不一致导致广播失败
 		Timestamp: 000000,
 	}
-
+	coinbase := crypto.PublicKey{}
 	b, _ := core.NewBlock(header, nil)
-	//tx := core.NewTransaction(nil)
-	//tx.From = coinbase
-	//tx.To = coinbase
-	//tx.Value = 10_000_000
-	//b.Transactions = append(b.Transactions, tx)
+	tx := core.NewTransaction(nil)
+	tx.From = coinbase
+	tx.To = coinbase
+	tx.Value = 10_000_000
+	b.Transactions = append(b.Transactions, tx)
 	privKey := crypto.GeneratePrivateKey()
 	if err := b.Sign(privKey); err != nil {
 		panic(err)
