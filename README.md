@@ -19,7 +19,7 @@ make run/test
 ## TODO
 
 - [ ] Transport/Server层重构
-- [ ] Local Server通过TCP Transport实现广播与重构（doing now）
 - [ ] Blockchain内包含Block对象逻辑优化
+- [ ] 解决源代码中未解决的NodeB间接同步问题
 - [ ] ...
 
