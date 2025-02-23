@@ -21,7 +21,6 @@ type ServerOpts struct {
 	APIListenAddr string
 	SeedNodes     []string
 	ListenAddr    string
-	TCPTransport  *TCPTransport
 	ID            string
 	Logger        log.Logger
 	RPCDecodeFunc RPCDecodeFunc
@@ -34,9 +33,9 @@ type Server struct {
 	// 匿名嵌套结构体，在没有显式初始化ServerOpts的情况下，对内部字段的赋值不会生效，但不会报错（直接就是0值）
 	ServerOpts
 	TCPTransport *TCPTransport
-	peerCh       chan *TCPPeer
 	mu           sync.RWMutex
 	peerMap      map[net.Addr]*TCPPeer
+	trans        []net.Addr
 	memPool      *TxPool
 	chain        *core.Blockchain
 	isValidator  bool
@@ -82,7 +81,6 @@ func NewServer(opts ServerOpts) (*Server, error) {
 	tr := NewTcpTransport(opts.ListenAddr, peerCh)
 	s := &Server{
 		TCPTransport: tr,
-		peerCh:       peerCh,
 		peerMap:      make(map[net.Addr]*TCPPeer),
 		ServerOpts:   opts,
 		chain:        chain,
@@ -92,7 +90,6 @@ func NewServer(opts ServerOpts) (*Server, error) {
 		quitChan:     make(chan struct{}, 1),
 		txChan:       txChan,
 	}
-	s.TCPTransport.peerCh = peerCh
 	if s.RPCProcessor == nil {
 		// 如果RPCProcessor不存在，则调用Server自己的接口实现，即调用自己的ProcessMessage函数
 		s.RPCProcessor = s
@@ -114,9 +111,11 @@ func (s *Server) bootstrapNetwork() {
 				fmt.Printf("could not connect to %+v\n", conn)
 				return
 			}
-			s.peerCh <- &TCPPeer{
+			s.TCPTransport.peerCh <- &TCPPeer{
 				conn: conn,
 			}
+			//fmt.Println("本地端口:", conn.LocalAddr().String())      // 例如 127.0.0.1:57088
+			//fmt.Println("远程(发送)端口:", conn.RemoteAddr().String()) // 127.0.0.1:4000
 			//fmt.Println("TCP peer ", conn)
 		}(addr)
 	}
@@ -126,11 +125,11 @@ func (s *Server) Start() {
 	s.TCPTransport.Start()
 	time.Sleep(time.Second * 1)
 	s.bootstrapNetwork()
-	s.Logger.Log("msg", "accepting TCP connection on", "addr", s.ListenAddr, "id", s.ID)
+	//s.Logger.Log("msg", "accepting TCP connection on", "addr", s.ListenAddr, "id", s.ID)
 free:
 	for {
 		select {
-		case peer := <-s.peerCh:
+		case peer := <-s.TCPTransport.peerCh:
 			s.peerMap[peer.conn.RemoteAddr()] = peer
 			//fmt.Println("TCP listen addr is", s.ListenAddr, "remote is", peer.conn.RemoteAddr())
 			go peer.readLoop(s.rpcCh)
@@ -257,7 +256,7 @@ func (s *Server) broadcast(payload []byte) error {
 		if err := peer.Send(payload); err != nil {
 			return fmt.Errorf("peer send error => error %s [err: %s]", netAddr, err)
 		}
-		//fmt.Println("broadcast to ", peer.conn.RemoteAddr(), " from ", peer)
+		fmt.Println("Server", s.ListenAddr, " broadcast to ", netAddr, " from ", peer)
 	}
 
 	return nil

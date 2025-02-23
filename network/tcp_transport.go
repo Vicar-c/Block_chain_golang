@@ -7,9 +7,10 @@ import (
 	"net"
 )
 
+// TCPPeer 与远端的连接
 type TCPPeer struct {
-	conn     net.Conn
-	Outgoing bool
+	conn net.Conn
+	//From net.Addr
 }
 
 func (p *TCPPeer) Send(b []byte) error {
@@ -28,11 +29,10 @@ func (p *TCPPeer) readLoop(rpcCh chan RPC) {
 			fmt.Printf("read error: %s", err)
 			continue
 		}
-		msg := buf[:n]
 		//fmt.Println("p.conn.RemoteAddr is ", p.conn.RemoteAddr())
 		rpcCh <- RPC{
 			From:    p.conn.RemoteAddr(),
-			Payload: bytes.NewReader(msg),
+			Payload: bytes.NewReader(buf[:n]),
 		}
 		//fmt.Println(string(msg))
 	}
