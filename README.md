@@ -20,6 +20,6 @@ make run/test
 
 - [ ] Transport/Server层重构
 - [ ] Blockchain内包含Block对象逻辑优化
-- [ ] 解决源代码中未解决的NodeB间接同步问题
+- [ ] 解决源代码中未解决的NodeB间接同步问题(问题来自RemoteNode在本地既作为监听又作为发送方导致端口自动更改？)
 - [ ] ...
 
