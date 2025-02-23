@@ -70,7 +70,7 @@ func NewServer(opts ServerOpts) (*Server, error) {
 		//fmt.Println(opts.APIListenAddr)
 		apiServerConfig := api.ServerConfig{
 			Logger:     opts.Logger,
-			ListenAddr: opts.ListenAddr,
+			ListenAddr: opts.APIListenAddr,
 		}
 		apiServer := api.NewServer(apiServerConfig, chain, txChan)
 		go apiServer.Start()

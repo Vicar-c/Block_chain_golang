@@ -15,11 +15,11 @@ import (
 
 func main() {
 	validatorPrivKey := crypto.GeneratePrivateKey()
-	localNode := makeServer("LOCAL_NODE", &validatorPrivKey, "127.0.0.1:3000", []string{"127.0.0.1:4000"}, "127.0.0.1:9000")
+	localNode := makeServer("LOCAL_NODE", &validatorPrivKey, ":3000", []string{":4000"}, ":9000")
 
-	remoteNode := makeServer("REMOTE_NODE", nil, "127.0.0.1:4000", []string{"127.0.0.1:6000"}, "")
+	remoteNode := makeServer("REMOTE_NODE", nil, ":4000", []string{":6000"}, "")
 
-	remoteNodeB := makeServer("REMOTE_NODE_B", nil, "127.0.0.1:6000", nil, "")
+	remoteNodeB := makeServer("REMOTE_NODE_B", nil, ":6000", nil, "")
 	go localNode.Start()
 	go remoteNode.Start()
 	go remoteNodeB.Start()
